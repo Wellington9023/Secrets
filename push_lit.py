@@ -8,7 +8,8 @@ import json
 KEYWORDS = [
     "soil amino sugar", 
     "soil organic carbon fraction", 
-    "soil microbial strategy"
+    "soil microbial strategy",
+    "soil aggregate"
 ]
 EMAIL = "949238124@qq.com"
 MAX_RESULTS_PER_KEYWORD = 5
