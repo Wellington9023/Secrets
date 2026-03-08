@@ -12,17 +12,16 @@ KEYWORDS = [
     "soil aggregate"
 ]
 EMAIL = "949238124@qq.com"
-MAX_RESULTS_PER_KEYWORD = 8
-TIME_RANGE_HOURS = 72
+MAX_RESULTS_PER_KEYWORD = 5  # 每个关键词只展示5篇
+START_YEAR = 2026            # 起始年份
 
 WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK")
 
-def get_date_range(hours=48):
-    now = datetime.datetime.utcnow()
-    start_time = now - datetime.timedelta(hours=hours)
-    from_date = start_time.strftime("%Y-%m-%d")
-    until_date = now.strftime("%Y-%m-%d")
-    return from_date, until_date
+def get_date_range(start_year):
+    # 起始日期：指定年份的1月1日
+    from_date = f"{start_year}-01-01"
+    # 结束日期：不设置 until-pub-date，API 默认就是直到今天
+    return from_date
 
 def clean_abstract(text):
     if not text:
@@ -35,20 +34,20 @@ def clean_abstract(text):
     clean = re.sub(r'<.*?>', '', clean) 
     return clean.strip()
 
-def fetch_crossref(keyword, from_date, until_date):
+def fetch_crossref(keyword, from_date):
     url = "https://api.crossref.org/works"
     
-    # ✅ 修改点：在 filter 中增加 language:en
-    # 格式：key1:value1,key2:value2,key3:value3
-    date_filter = f"from-pub-date:{from_date},until-pub-date:{until_date}"
-    full_filter = f"{date_filter},language:en"
+    # ✅ 修改点：只设置起始日期，不设置结束日期 (默认为今天)
+    # 同时保留 language:en 过滤
+    # 格式：from-pub-date:YYYY-MM-DD,language:en
+    full_filter = f"from-pub-date:{from_date},language:en"
     
     params = {
         "query": keyword,
-        "filter": full_filter,  # 使用包含语言过滤的完整字符串
-        "sort": "published",
-        "order": "desc",
-        "rows": MAX_RESULTS_PER_KEYWORD,
+        "filter": full_filter,
+        "sort": "published",      # 按发表日期排序
+        "order": "desc",          # 倒序 (最新的在前)
+        "rows": MAX_RESULTS_PER_KEYWORD, # 只取前5条
         "mailto": EMAIL
     }
     
@@ -151,18 +150,19 @@ def send_to_feishu(text_content):
         print(f"❌ 发送网络请求出错: {e}")
 
 def main():
-    from_date, until_date = get_date_range(TIME_RANGE_HOURS)
-    print(f"🔍 开始任务 | 时间范围: {from_date} 至 {until_date}")
+    from_date = get_date_range(START_YEAR)
+    print(f"🔍 开始任务 | 时间范围: {from_date} 至今")
     print(f"🌐 语言过滤: 仅英文 (language:en)")
+    print(f"🔢 数量限制: 每个关键词最新 {MAX_RESULTS_PER_KEYWORD} 篇")
     
-    full_message = f"【文献日报】({from_date} ~ {until_date})\n\n"
+    full_message = f"【文献精选】({START_YEAR}年 - 至今)\n\n"
     has_new_papers = False
     
     for kw in KEYWORDS:
-        papers = fetch_crossref(kw, from_date, until_date)
+        papers = fetch_crossref(kw, from_date)
         
         if papers:
-            print(f"   -> [{kw}] 找到 {len(papers)} 篇 (英文)")
+            print(f"   -> [{kw}] 找到 {len(papers)} 篇")
             has_new_papers = True
             full_message += f"🔬 关键词：{kw}\n"
             full_message += "-" * 30 + "\n"
@@ -179,12 +179,12 @@ def main():
             print(f"   -> [{kw}] 无结果")
     
     if not has_new_papers:
-        full_message = f"【文献日报测试】({from_date} ~ {until_date})\n\n"
-        full_message += "✅ 系统运行正常！API 连接已成功修复。\n\n"
-        full_message += f"⚠️ 过去 {TIME_RANGE_HOURS} 小时内，Crossref 未收录匹配以下关键词的新英文文献：\n"
+        full_message = f"【文献检索测试】({START_YEAR}年 - 至今)\n\n"
+        full_message += "✅ 系统运行正常！\n\n"
+        full_message += f"⚠️ 自 {START_YEAR} 年以来，Crossref 未收录匹配以下关键词的英文文献（或暂无数据）：\n"
         for kw in KEYWORDS:
             full_message += f"- {kw}\n"
-        full_message += "\n💡 机器人将持续监控，一旦有新文章将立即推送。"
+        full_message += "\n💡 请检查关键词拼写或时间范围。"
     
     print("\n--- 准备发送的内容预览 ---")
     print(full_message[:600] + ("..." if len(full_message)>600 else ""))
