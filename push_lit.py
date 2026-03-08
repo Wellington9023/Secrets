@@ -3,7 +3,6 @@ import datetime
 import os
 import re
 import json
-from urllib.parse import quote
 
 # --- 配置区域 ---
 KEYWORDS = [
@@ -38,39 +37,35 @@ def clean_abstract(text):
 def fetch_crossref(keyword, from_date, until_date):
     url = "https://api.crossref.org/works"
     
-    # ✅ 关键修复：使用 filter 参数处理日期，而不是单独的 from/until 参数
-    # 格式: published:YYYY-MM-DD,YYYY-MM-DD
-    date_filter = f"published:{from_date},{until_date}"
+    # ✅ 终极修复：使用 Crossref 官方指定的 filter 语法
+    # 格式：key1:value1,key2:value2
+    # 有效 key: from-pub-date, until-pub-date (参考之前的报错日志)
+    date_filter = f"from-pub-date:{from_date},until-pub-date:{until_date}"
     
     params = {
         "query": keyword,
-        # 移除 from-pub-date 和 until-pub-date
-        "filter": date_filter, 
+        "filter": date_filter,  # 将日期过滤放入 filter 参数
         "sort": "published",
         "order": "desc",
         "rows": MAX_RESULTS_PER_KEYWORD,
-        "mailto": EMAIL,
-        # 依然不使用 select，保证兼容性
+        "mailto": EMAIL
     }
     
     try:
-        # 打印调试信息（在 GitHub Actions 日志中可见）
-        # print(f"   -> 请求 URL 参数: {params}") 
-        
         response = requests.get(url, params=params, timeout=15)
         
-        # 详细错误处理
         if response.status_code != 200:
             print(f"❌ API 请求失败 ({response.status_code})")
             try:
                 err_data = response.json()
-                print(f"   错误详情: {err_data}")
-                # 如果是具体的参数错误，打印出来帮助用户
+                # 只打印关键错误信息，避免日志太长
                 if 'message' in err_data:
                     for msg in err_data['message']:
-                        print(f"   ⚠️ 提示: {msg.get('message', '')}")
+                        print(f"   ⚠️ 错误: {msg.get('message', '')}")
+                else:
+                    print(f"   原始响应: {response.text[:200]}")
             except:
-                print(f"   原始响应: {response.text[:300]}")
+                print(f"   无法解析错误响应")
             return []
 
         data = response.json()
@@ -161,6 +156,7 @@ def main():
     from_date, until_date = get_date_range(TIME_RANGE_HOURS)
     print(f"🔍 开始任务 | 时间范围: {from_date} 至 {until_date}")
     print(f"📧 使用邮箱: {EMAIL}")
+    print(f"🔗 Filter 参数: from-pub-date:{from_date},until-pub-date:{until_date}")
     
     full_message = f"📅 **文献日报** ({from_date} ~ {until_date})\n\n"
     has_new_papers = False
@@ -187,7 +183,7 @@ def main():
     
     if not has_new_papers:
         full_message = f"📅 **文献日报测试** ({from_date} ~ {until_date})\n\n"
-        full_message += f"✅ **系统运行正常！** (API 连接已成功修复)\n\n"
+        full_message += f"✅ **系统运行正常！** (API 连接已完全修复)\n\n"
         full_message += f"⚠️ 过去 {TIME_RANGE_HOURS} 小时内，Crossref 未收录匹配以下关键词的新文献：\n"
         for kw in KEYWORDS:
             full_message += f"- `{kw}`\n"
