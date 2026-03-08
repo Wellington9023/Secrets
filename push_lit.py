@@ -37,14 +37,12 @@ def clean_abstract(text):
 def fetch_crossref(keyword, from_date, until_date):
     url = "https://api.crossref.org/works"
     
-    # ✅ 终极修复：使用 Crossref 官方指定的 filter 语法
-    # 格式：key1:value1,key2:value2
-    # 有效 key: from-pub-date, until-pub-date (参考之前的报错日志)
+    # ✅ 正确的 Filter 语法
     date_filter = f"from-pub-date:{from_date},until-pub-date:{until_date}"
     
     params = {
         "query": keyword,
-        "filter": date_filter,  # 将日期过滤放入 filter 参数
+        "filter": date_filter,
         "sort": "published",
         "order": "desc",
         "rows": MAX_RESULTS_PER_KEYWORD,
@@ -58,14 +56,11 @@ def fetch_crossref(keyword, from_date, until_date):
             print(f"❌ API 请求失败 ({response.status_code})")
             try:
                 err_data = response.json()
-                # 只打印关键错误信息，避免日志太长
                 if 'message' in err_data:
                     for msg in err_data['message']:
                         print(f"   ⚠️ 错误: {msg.get('message', '')}")
-                else:
-                    print(f"   原始响应: {response.text[:200]}")
             except:
-                print(f"   无法解析错误响应")
+                pass
             return []
 
         data = response.json()
@@ -131,8 +126,9 @@ def send_to_feishu(text_content):
         print(text_content)
         return
 
+    # ✅ 修改点：将 msg_type 改为 'text' (纯文本)，兼容性最好
     payload = {
-        "msg_type": "markdown",
+        "msg_type": "text",
         "content": {
             "text": text_content
         }
@@ -142,8 +138,9 @@ def send_to_feishu(text_content):
         resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         if resp.status_code == 200:
             res_json = resp.json()
+            # 飞书 text 类型成功通常也是 code: 0
             if res_json.get("StatusCode") == 0 or res_json.get("code") == 0:
-                print("✅ 成功推送到飞书!")
+                print("✅ 成功推送到飞书 (Text 模式)!")
             else:
                 print(f"⚠️ 飞书返回非零状态码: {res_json}")
         else:
@@ -155,42 +152,41 @@ def send_to_feishu(text_content):
 def main():
     from_date, until_date = get_date_range(TIME_RANGE_HOURS)
     print(f"🔍 开始任务 | 时间范围: {from_date} 至 {until_date}")
-    print(f"📧 使用邮箱: {EMAIL}")
-    print(f"🔗 Filter 参数: from-pub-date:{from_date},until-pub-date:{until_date}")
     
-    full_message = f"📅 **文献日报** ({from_date} ~ {until_date})\n\n"
+    # ✅ 构建纯文本消息 (去掉了 Markdown 符号如 **, ### 等)
+    full_message = f"【文献日报】({from_date} ~ {until_date})\n\n"
     has_new_papers = False
     
     for kw in KEYWORDS:
-        print(f"   -> 正在检索: [{kw}] ...")
         papers = fetch_crossref(kw, from_date, until_date)
         
         if papers:
-            print(f"      ✅ 找到 {len(papers)} 篇")
+            print(f"   -> [{kw}] 找到 {len(papers)} 篇")
             has_new_papers = True
-            full_message += f"🔬 关键词：**{kw}**\n"
+            full_message += f"🔬 关键词：{kw}\n"
+            full_message += "-" * 30 + "\n"
             for i, p in enumerate(papers, 1):
                 short_abstract = p['abstract'][:200] + "..." if len(p['abstract']) > 200 else p['abstract']
                 
-                full_message += f"{i}. **{p['title']}**\n"
-                full_message += f"   👤 {p['authors']}\n"
-                full_message += f"   📖 {p['journal']} | 📅 {p['date']}\n"
-                full_message += f"   📝 {short_abstract}\n"
-                full_message += f"   🔗 [DOI](https://doi.org/{p['doi']})\n\n"
-            full_message += "---\n\n"
+                full_message += f"{i}. {p['title']}\n"
+                full_message += f"   作者：{p['authors']}\n"
+                full_message += f"   期刊：{p['journal']} | 日期：{p['date']}\n"
+                full_message += f"   摘要：{short_abstract}\n"
+                full_message += f"   链接：https://doi.org/{p['doi']}\n\n"
+            full_message += "\n"
         else:
-            print(f"      ⚪ 无结果")
+            print(f"   -> [{kw}] 无结果")
     
     if not has_new_papers:
-        full_message = f"📅 **文献日报测试** ({from_date} ~ {until_date})\n\n"
-        full_message += f"✅ **系统运行正常！** (API 连接已完全修复)\n\n"
+        full_message = f"【文献日报测试】({from_date} ~ {until_date})\n\n"
+        full_message += "✅ 系统运行正常！API 连接已成功修复。\n\n"
         full_message += f"⚠️ 过去 {TIME_RANGE_HOURS} 小时内，Crossref 未收录匹配以下关键词的新文献：\n"
         for kw in KEYWORDS:
-            full_message += f"- `{kw}`\n"
+            full_message += f"- {kw}\n"
         full_message += "\n💡 机器人将持续监控，一旦有新文章将立即推送。"
     
     print("\n--- 准备发送的内容预览 ---")
-    print(full_message[:500] + ("..." if len(full_message)>500 else ""))
+    print(full_message[:600] + ("..." if len(full_message)>600 else ""))
     print("--------------------------\n")
     
     send_to_feishu(full_message)
