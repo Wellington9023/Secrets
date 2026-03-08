@@ -5,15 +5,18 @@ import re
 import json
 
 # --- 配置区域 ---
+# ✅ 优化建议：使用更通用的关键词，或包含连字符的变体
+# Crossref 对短语匹配较严格，"mineral-associated" 比 "mineral association" 更常见
 KEYWORDS = [
-    "soil microbial necromass", 
-    "mineral association organic carbon", 
+    "microbial necromass", 
+    "mineral-associated organic carbon", # 修正了连字符
     "soil microbial community",
-     "soil aggregate"
+    "soil aggregates" # 复数形式通常更多
 ]
+
 EMAIL = "949238124@qq.com"
 MAX_RESULTS_PER_KEYWORD = 5
-START_YEAR = 2025
+START_YEAR = 2024  # ✅ 建议先改为2024年测试，确认是否有数据
 
 WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK")
 
@@ -34,14 +37,11 @@ def clean_abstract(text):
 def fetch_crossref(keyword, from_date):
     url = "https://api.crossref.org/works"
     
-    # 过滤条件：2026年至今 + 英文
+    # 过滤条件：指定年份至今 + 英文
     full_filter = f"from-pub-date:{from_date},language:en"
     
     params = {
-        # ✅ 修改点：使用 query.bibliographic 替代 query
-        # 这将在标题、摘要、作者、机构等所有书目字段中搜索关键词
         "query.bibliographic": keyword,
-        
         "filter": full_filter,
         "sort": "published",
         "order": "desc",
@@ -50,21 +50,24 @@ def fetch_crossref(keyword, from_date):
     }
     
     try:
+        # 打印请求详情以便调试
+        print(f"   🔍 正在请求: {keyword} ...")
+        
         response = requests.get(url, params=params, timeout=15)
         
         if response.status_code != 200:
-            print(f"❌ API 请求失败 ({response.status_code})")
-            try:
-                err_data = response.json()
-                if 'message' in err_data:
-                    for msg in err_data['message']:
-                        print(f"   ⚠️ 错误: {msg.get('message', '')}")
-            except:
-                pass
+            print(f"   ❌ API 请求失败 ({response.status_code})")
             return []
 
         data = response.json()
         items = data.get("message", {}).get("items", [])
+        
+        # 如果没有结果，打印总记录数供参考 (total-results)
+        total_results = data.get("message", {}).get("total-results", 0)
+        if total_results == 0:
+            print(f"   ⚠️ 无结果 (总记录数: {total_results})")
+        else:
+            print(f"   ✅ 找到 {len(items)} 篇 (总记录数: {total_results})")
         
         if not items:
             return []
@@ -116,7 +119,7 @@ def fetch_crossref(keyword, from_date):
         return results
         
     except Exception as e:
-        print(f"💥 程序捕获到异常: {e}")
+        print(f"   💥 程序捕获到异常: {e}")
         return []
 
 def send_to_feishu(text_content):
@@ -138,21 +141,18 @@ def send_to_feishu(text_content):
         if resp.status_code == 200:
             res_json = resp.json()
             if res_json.get("StatusCode") == 0 or res_json.get("code") == 0:
-                print("✅ 成功推送到飞书 (Text 模式)!")
+                print("✅ 成功推送到飞书!")
             else:
                 print(f"⚠️ 飞书返回非零状态码: {res_json}")
         else:
             print(f"❌ 推送 HTTP 失败: {resp.status_code}")
-            print(f"   响应内容: {resp.text}")
     except Exception as e:
         print(f"❌ 发送网络请求出错: {e}")
 
 def main():
     from_date = get_date_range(START_YEAR)
-    print(f"🔍 开始任务 | 时间范围: {from_date} 至今")
-    print(f"🌐 语言过滤: 仅英文 (language:en)")
-    print(f"📚 检索模式: 全文 bibliographic (标题+摘要+作者...)")
-    print(f"🔢 数量限制: 每个关键词最新 {MAX_RESULTS_PER_KEYWORD} 篇")
+    print(f"🚀 开始任务 | 时间范围: {from_date} 至今")
+    print(f"🌐 语言: 英文 | 模式: Bibliographic 全文检索")
     
     full_message = f"【文献精选】({START_YEAR}年 - 至今)\n\n"
     has_new_papers = False
@@ -161,7 +161,6 @@ def main():
         papers = fetch_crossref(kw, from_date)
         
         if papers:
-            print(f"   -> [{kw}] 找到 {len(papers)} 篇")
             has_new_papers = True
             full_message += f"🔬 关键词：{kw}\n"
             full_message += "-" * 30 + "\n"
@@ -174,24 +173,20 @@ def main():
                 full_message += f"   摘要：{short_abstract}\n"
                 full_message += f"   链接：https://doi.org/{p['doi']}\n\n"
             full_message += "\n"
-        else:
-            print(f"   -> [{kw}] 无结果")
+        # 如果没结果，不在大消息里罗列，只在控制台看日志，保持消息整洁
     
     if not has_new_papers:
-        full_message = f"【文献检索测试】({START_YEAR}年 - 至今)\n\n"
-        full_message += "✅ 系统运行正常！\n\n"
-        full_message += f"⚠️ 自 {START_YEAR} 年以来，Crossref 未收录匹配以下关键词的英文文献（或暂无数据）：\n"
+        full_message = f"【文献检索提醒】({START_YEAR}年 - 至今)\n\n"
+        full_message += "✅ 系统运行正常，API 连接成功。\n\n"
+        full_message += f"⚠️ 在 Crossref 中未找到匹配以下关键词的**英文**文献：\n"
         for kw in KEYWORDS:
             full_message += f"- {kw}\n"
-        full_message += "\n💡 请检查关键词拼写或时间范围。"
+        full_message += f"\n💡 建议:\n1. 检查关键词拼写 (如连字符、单复数)。\n2. 尝试扩大时间范围 (当前设为 {START_YEAR} 年)。\n3. 某些细分领域可能近期无新发文。"
     
-    print("\n--- 准备发送的内容预览 ---")
-    print(full_message[:600] + ("..." if len(full_message)>600 else ""))
-    print("--------------------------\n")
+    print("\n--- 最终消息预览 ---")
+    print(full_message[:800] + ("..." if len(full_message)>800 else ""))
     
     send_to_feishu(full_message)
 
 if __name__ == "__main__":
     main()
-
-
