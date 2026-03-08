@@ -6,9 +6,9 @@ import json
 
 # --- 配置区域 ---
 KEYWORDS = [
-    "soil microbial necromass", 
-    "Mineral association organic carbon", 
-    "soil microbial community"
+    "soil amino sugar", 
+    "soil organic carbon fraction", 
+    "soil microbial strategy"
 ]
 EMAIL = "949238124@qq.com"
 MAX_RESULTS_PER_KEYWORD = 5
