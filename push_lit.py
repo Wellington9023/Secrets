@@ -6,21 +6,19 @@ import json
 
 # --- 配置区域 ---
 KEYWORDS = [
-    "soil amino sugar", 
-    "soil organic carbon fraction", 
-    "soil microbial strategy",
-    "soil aggregate"
+    "soil microbial necromass", 
+    "mineral association organic carbon", 
+    "soil microbial community",
+     "soil aggregate"
 ]
 EMAIL = "949238124@qq.com"
-MAX_RESULTS_PER_KEYWORD = 5  # 每个关键词只展示5篇
-START_YEAR = 2026            # 起始年份
+MAX_RESULTS_PER_KEYWORD = 5
+START_YEAR = 2026
 
 WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK")
 
 def get_date_range(start_year):
-    # 起始日期：指定年份的1月1日
     from_date = f"{start_year}-01-01"
-    # 结束日期：不设置 until-pub-date，API 默认就是直到今天
     return from_date
 
 def clean_abstract(text):
@@ -28,7 +26,6 @@ def clean_abstract(text):
         return "无摘要"
     if isinstance(text, list):
         text = text[0] if text else ""
-    # 去除常见的 JATS XML 标签
     clean = re.sub(r'<jats:p>', '', str(text))
     clean = re.sub(r'</jats:p>', '', clean)
     clean = re.sub(r'<.*?>', '', clean) 
@@ -37,17 +34,18 @@ def clean_abstract(text):
 def fetch_crossref(keyword, from_date):
     url = "https://api.crossref.org/works"
     
-    # ✅ 修改点：只设置起始日期，不设置结束日期 (默认为今天)
-    # 同时保留 language:en 过滤
-    # 格式：from-pub-date:YYYY-MM-DD,language:en
+    # 过滤条件：2026年至今 + 英文
     full_filter = f"from-pub-date:{from_date},language:en"
     
     params = {
-        "query": keyword,
+        # ✅ 修改点：使用 query.bibliographic 替代 query
+        # 这将在标题、摘要、作者、机构等所有书目字段中搜索关键词
+        "query.bibliographic": keyword,
+        
         "filter": full_filter,
-        "sort": "published",      # 按发表日期排序
-        "order": "desc",          # 倒序 (最新的在前)
-        "rows": MAX_RESULTS_PER_KEYWORD, # 只取前5条
+        "sort": "published",
+        "order": "desc",
+        "rows": MAX_RESULTS_PER_KEYWORD,
         "mailto": EMAIL
     }
     
@@ -153,6 +151,7 @@ def main():
     from_date = get_date_range(START_YEAR)
     print(f"🔍 开始任务 | 时间范围: {from_date} 至今")
     print(f"🌐 语言过滤: 仅英文 (language:en)")
+    print(f"📚 检索模式: 全文 bibliographic (标题+摘要+作者...)")
     print(f"🔢 数量限制: 每个关键词最新 {MAX_RESULTS_PER_KEYWORD} 篇")
     
     full_message = f"【文献精选】({START_YEAR}年 - 至今)\n\n"
@@ -194,3 +193,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
