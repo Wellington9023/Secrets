@@ -6,7 +6,7 @@ import json
 
 # --- 配置区域 ---
 KEYWORDS = [
-    "microbial necromass", 
+    "soil microbial necromass", 
     "Mineral association organic carbon", 
     "soil microbial community"
 ]
@@ -37,12 +37,14 @@ def clean_abstract(text):
 def fetch_crossref(keyword, from_date, until_date):
     url = "https://api.crossref.org/works"
     
-    # ✅ 正确的 Filter 语法
+    # ✅ 修改点：在 filter 中增加 language:en
+    # 格式：key1:value1,key2:value2,key3:value3
     date_filter = f"from-pub-date:{from_date},until-pub-date:{until_date}"
+    full_filter = f"{date_filter},language:en"
     
     params = {
         "query": keyword,
-        "filter": date_filter,
+        "filter": full_filter,  # 使用包含语言过滤的完整字符串
         "sort": "published",
         "order": "desc",
         "rows": MAX_RESULTS_PER_KEYWORD,
@@ -126,7 +128,6 @@ def send_to_feishu(text_content):
         print(text_content)
         return
 
-    # ✅ 修改点：将 msg_type 改为 'text' (纯文本)，兼容性最好
     payload = {
         "msg_type": "text",
         "content": {
@@ -138,7 +139,6 @@ def send_to_feishu(text_content):
         resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         if resp.status_code == 200:
             res_json = resp.json()
-            # 飞书 text 类型成功通常也是 code: 0
             if res_json.get("StatusCode") == 0 or res_json.get("code") == 0:
                 print("✅ 成功推送到飞书 (Text 模式)!")
             else:
@@ -152,8 +152,8 @@ def send_to_feishu(text_content):
 def main():
     from_date, until_date = get_date_range(TIME_RANGE_HOURS)
     print(f"🔍 开始任务 | 时间范围: {from_date} 至 {until_date}")
+    print(f"🌐 语言过滤: 仅英文 (language:en)")
     
-    # ✅ 构建纯文本消息 (去掉了 Markdown 符号如 **, ### 等)
     full_message = f"【文献日报】({from_date} ~ {until_date})\n\n"
     has_new_papers = False
     
@@ -161,7 +161,7 @@ def main():
         papers = fetch_crossref(kw, from_date, until_date)
         
         if papers:
-            print(f"   -> [{kw}] 找到 {len(papers)} 篇")
+            print(f"   -> [{kw}] 找到 {len(papers)} 篇 (英文)")
             has_new_papers = True
             full_message += f"🔬 关键词：{kw}\n"
             full_message += "-" * 30 + "\n"
@@ -180,7 +180,7 @@ def main():
     if not has_new_papers:
         full_message = f"【文献日报测试】({from_date} ~ {until_date})\n\n"
         full_message += "✅ 系统运行正常！API 连接已成功修复。\n\n"
-        full_message += f"⚠️ 过去 {TIME_RANGE_HOURS} 小时内，Crossref 未收录匹配以下关键词的新文献：\n"
+        full_message += f"⚠️ 过去 {TIME_RANGE_HOURS} 小时内，Crossref 未收录匹配以下关键词的新英文文献：\n"
         for kw in KEYWORDS:
             full_message += f"- {kw}\n"
         full_message += "\n💡 机器人将持续监控，一旦有新文章将立即推送。"
