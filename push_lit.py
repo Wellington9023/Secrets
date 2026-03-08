@@ -5,20 +5,20 @@ import re
 import json
 
 # --- 配置区域 ---
-# ✅ 优化建议：使用更通用的关键词，或包含连字符的变体
-# Crossref 对短语匹配较严格，"mineral-associated" 比 "mineral association" 更常见
 KEYWORDS = [
     "microbial necromass", 
-    "mineral-associated organic carbon", # 修正了连字符
+    "mineral-associated organic carbon", 
     "soil microbial community",
-    "soil aggregates" # 复数形式通常更多
+    "soil aggregates"
 ]
-
 EMAIL = "949238124@qq.com"
 MAX_RESULTS_PER_KEYWORD = 5
-START_YEAR = 2024  # ✅ 建议先改为2024年测试，确认是否有数据
+START_YEAR = 2025  # 建议先设为2024测试数据
 
 WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK")
+
+# ❌ Crossref API 不支持 language 过滤，我们手动排除常见非英文代码
+NON_ENGLISH_LANGUAGES = {'zh', 'ja', 'de', 'fr', 'es', 'ru', 'ko', 'pt'}
 
 def get_date_range(start_year):
     from_date = f"{start_year}-01-01"
@@ -34,46 +34,75 @@ def clean_abstract(text):
     clean = re.sub(r'<.*?>', '', clean) 
     return clean.strip()
 
+def is_english_item(item):
+    """
+    检查条目是否为英文。
+    如果 Crossref 返回了 language 字段，则检查它。
+    如果没有返回，默认认为是英文（因为我们的关键词是英文）。
+    """
+    languages = item.get("language", [])
+    if not languages:
+        return True  # 没有语言标记，默认通过
+    
+    # languages 通常是列表，如 ['en'] 或 ['zh']
+    if isinstance(languages, list):
+        lang_code = languages[0].lower() if languages else ""
+    else:
+        lang_code = str(languages).lower()
+        
+    if lang_code in NON_ENGLISH_LANGUAGES:
+        return False
+    return True
+
 def fetch_crossref(keyword, from_date):
     url = "https://api.crossref.org/works"
     
-    # 过滤条件：指定年份至今 + 英文
-    full_filter = f"from-pub-date:{from_date},language:en"
+    # ✅ 修改点：移除了 language:en，因为它会导致 400 错误
+    # 只保留日期过滤
+    full_filter = f"from-pub-date:{from_date}"
     
     params = {
         "query.bibliographic": keyword,
         "filter": full_filter,
         "sort": "published",
         "order": "desc",
-        "rows": MAX_RESULTS_PER_KEYWORD,
+        "rows": MAX_RESULTS_PER_KEYWORD * 2, # 多取一些，以便过滤掉非英文后还够5篇
         "mailto": EMAIL
     }
     
     try:
-        # 打印请求详情以便调试
         print(f"   🔍 正在请求: {keyword} ...")
-        
         response = requests.get(url, params=params, timeout=15)
         
         if response.status_code != 200:
             print(f"   ❌ API 请求失败 ({response.status_code})")
+            # 打印具体错误信息
+            try:
+                err_data = response.json()
+                msg = err_data.get("message", "")
+                if isinstance(msg, list):
+                    for m in msg:
+                        print(f"      详情: {m.get('message', '')}")
+                else:
+                    print(f"      详情: {msg}")
+            except:
+                print(f"      响应内容: {response.text[:200]}")
             return []
 
         data = response.json()
         items = data.get("message", {}).get("items", [])
-        
-        # 如果没有结果，打印总记录数供参考 (total-results)
         total_results = data.get("message", {}).get("total-results", 0)
-        if total_results == 0:
-            print(f"   ⚠️ 无结果 (总记录数: {total_results})")
-        else:
-            print(f"   ✅ 找到 {len(items)} 篇 (总记录数: {total_results})")
         
         if not items:
+            print(f"   ⚠️ 无结果 (总记录数: {total_results})")
             return []
 
         results = []
         for item in items:
+            # ✅ 手动过滤非英文
+            if not is_english_item(item):
+                continue
+                
             title_list = item.get("title", [])
             if not title_list:
                 continue
@@ -116,6 +145,12 @@ def fetch_crossref(keyword, from_date):
                 "date": pub_date_str,
                 "authors": author_str
             })
+            
+            # 如果已经收集够5篇，停止
+            if len(results) >= MAX_RESULTS_PER_KEYWORD:
+                break
+        
+        print(f"   ✅ 最终保留 {len(results)} 篇英文文献 (总命中: {total_results})")
         return results
         
     except Exception as e:
@@ -152,7 +187,8 @@ def send_to_feishu(text_content):
 def main():
     from_date = get_date_range(START_YEAR)
     print(f"🚀 开始任务 | 时间范围: {from_date} 至今")
-    print(f"🌐 语言: 英文 | 模式: Bibliographic 全文检索")
+    print(f"🌐 语言策略: 自动过滤非英文 (代码层过滤)")
+    print(f"🔢 数量限制: 每个关键词最新 {MAX_RESULTS_PER_KEYWORD} 篇")
     
     full_message = f"【文献精选】({START_YEAR}年 - 至今)\n\n"
     has_new_papers = False
@@ -173,7 +209,6 @@ def main():
                 full_message += f"   摘要：{short_abstract}\n"
                 full_message += f"   链接：https://doi.org/{p['doi']}\n\n"
             full_message += "\n"
-        # 如果没结果，不在大消息里罗列，只在控制台看日志，保持消息整洁
     
     if not has_new_papers:
         full_message = f"【文献检索提醒】({START_YEAR}年 - 至今)\n\n"
@@ -181,7 +216,7 @@ def main():
         full_message += f"⚠️ 在 Crossref 中未找到匹配以下关键词的**英文**文献：\n"
         for kw in KEYWORDS:
             full_message += f"- {kw}\n"
-        full_message += f"\n💡 建议:\n1. 检查关键词拼写 (如连字符、单复数)。\n2. 尝试扩大时间范围 (当前设为 {START_YEAR} 年)。\n3. 某些细分领域可能近期无新发文。"
+        full_message += f"\n💡 建议:\n1. 确认关键词拼写 (如连字符、单复数)。\n2. 尝试扩大时间范围 (当前设为 {START_YEAR} 年)。\n3. 某些细分领域可能近期无新发文。"
     
     print("\n--- 最终消息预览 ---")
     print(full_message[:800] + ("..." if len(full_message)>800 else ""))
@@ -190,3 +225,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
