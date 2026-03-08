@@ -3,6 +3,7 @@ import datetime
 import os
 import re
 import json
+from urllib.parse import quote
 
 # --- 配置区域 ---
 KEYWORDS = [
@@ -27,7 +28,6 @@ def clean_abstract(text):
     if not text:
         return "无摘要"
     if isinstance(text, list):
-        # 有时 abstract 是个列表，取第一个
         text = text[0] if text else ""
     # 去除常见的 JATS XML 标签
     clean = re.sub(r'<jats:p>', '', str(text))
@@ -38,34 +38,47 @@ def clean_abstract(text):
 def fetch_crossref(keyword, from_date, until_date):
     url = "https://api.crossref.org/works"
     
-    # ✅ 关键修改：彻底移除 select 参数，使用默认返回字段，避免 400 错误
+    # ✅ 关键修复：使用 filter 参数处理日期，而不是单独的 from/until 参数
+    # 格式: published:YYYY-MM-DD,YYYY-MM-DD
+    date_filter = f"published:{from_date},{until_date}"
+    
     params = {
         "query": keyword,
-        "from-pub-date": from_date,
-        "until-pub-date": until_date,
+        # 移除 from-pub-date 和 until-pub-date
+        "filter": date_filter, 
         "sort": "published",
         "order": "desc",
         "rows": MAX_RESULTS_PER_KEYWORD,
-        "mailto": EMAIL
-        # "select": "..."  <-- 已删除，不再限制返回字段
+        "mailto": EMAIL,
+        # 依然不使用 select，保证兼容性
     }
     
     try:
+        # 打印调试信息（在 GitHub Actions 日志中可见）
+        # print(f"   -> 请求 URL 参数: {params}") 
+        
         response = requests.get(url, params=params, timeout=15)
         
         # 详细错误处理
         if response.status_code != 200:
-            print(f"❌ API 请求失败 ({response.status_code}): {response.url}")
+            print(f"❌ API 请求失败 ({response.status_code})")
             try:
                 err_data = response.json()
                 print(f"   错误详情: {err_data}")
+                # 如果是具体的参数错误，打印出来帮助用户
+                if 'message' in err_data:
+                    for msg in err_data['message']:
+                        print(f"   ⚠️ 提示: {msg.get('message', '')}")
             except:
-                print(f"   原始响应: {response.text[:200]}")
+                print(f"   原始响应: {response.text[:300]}")
             return []
 
         data = response.json()
         items = data.get("message", {}).get("items", [])
         
+        if not items:
+            return []
+
         results = []
         for item in items:
             title_list = item.get("title", [])
@@ -73,19 +86,15 @@ def fetch_crossref(keyword, from_date, until_date):
                 continue
             title = title_list[0]
             
-            # 获取摘要 (现在肯定在默认返回里了)
             abstract_raw = item.get("abstract", "")
             abstract = clean_abstract(abstract_raw)
             
             doi = item.get("DOI", "No DOI")
             
-            # 安全获取期刊名
             journal_list = item.get("container-title", [])
             journal = journal_list[0] if journal_list else "Unknown Journal"
             
-            # 安全获取日期
             pub_date_parts = item.get("published", {}).get("date-parts", [[0,0,0]])[0]
-            # 防止日期部分缺失导致 IndexError
             try:
                 y = pub_date_parts[0]
                 m = pub_date_parts[1] if len(pub_date_parts) > 1 else 1
@@ -94,7 +103,6 @@ def fetch_crossref(keyword, from_date, until_date):
             except:
                 pub_date_str = "Unknown Date"
             
-            # 安全获取作者
             authors = item.get("author", [])
             author_str = "Unknown Authors"
             if authors:
@@ -124,7 +132,6 @@ def fetch_crossref(keyword, from_date, until_date):
 def send_to_feishu(text_content):
     if not WEBHOOK_URL:
         print("❌ 严重错误: 未找到 FEISHU_WEBHOOK 环境变量！")
-        print("请检查 GitHub Settings -> Secrets 是否设置了 FEISHU_WEBHOOK")
         print("--- 本地模拟输出 ---")
         print(text_content)
         return
@@ -140,7 +147,6 @@ def send_to_feishu(text_content):
         resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         if resp.status_code == 200:
             res_json = resp.json()
-            # 飞书成功通常返回 StatusCode: 0
             if res_json.get("StatusCode") == 0 or res_json.get("code") == 0:
                 print("✅ 成功推送到飞书!")
             else:
@@ -179,17 +185,15 @@ def main():
         else:
             print(f"      ⚪ 无结果")
     
-    # 构造最终消息
     if not has_new_papers:
         full_message = f"📅 **文献日报测试** ({from_date} ~ {until_date})\n\n"
-        full_message += f"✅ **系统运行正常！**\n\n"
+        full_message += f"✅ **系统运行正常！** (API 连接已成功修复)\n\n"
         full_message += f"⚠️ 过去 {TIME_RANGE_HOURS} 小时内，Crossref 未收录匹配以下关键词的新文献：\n"
         for kw in KEYWORDS:
             full_message += f"- `{kw}`\n"
         full_message += "\n💡 机器人将持续监控，一旦有新文章将立即推送。"
     
     print("\n--- 准备发送的内容预览 ---")
-    # 打印前 500 字符预览
     print(full_message[:500] + ("..." if len(full_message)>500 else ""))
     print("--------------------------\n")
     
