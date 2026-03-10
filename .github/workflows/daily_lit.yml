@@ -4,7 +4,7 @@ on:
   schedule:
     # 每天 UTC 时间 00:00 运行 (即北京时间早上 08:00)
     # 如果你想改为其他时间，可以修改 cron 表达式
-    - cron: '0 0 * * *'
+    - cron: '5 0 * * *'
   
   # 允许手动触发测试
   workflow_dispatch:
