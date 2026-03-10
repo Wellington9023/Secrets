@@ -113,10 +113,10 @@ def is_target_journal(journal_name):
             
     return False
 
+# ... (前面的代码保持不变)
+
 def fetch_crossref(keyword, from_date):
     url = "https://api.crossref.org/works"
-    
-    # 依然限制为期刊论文，减少噪音
     full_filter = f"from-pub-date:{from_date},type:journal-article"
     
     params = {
@@ -124,7 +124,7 @@ def fetch_crossref(keyword, from_date):
         "filter": full_filter,
         "sort": "published",
         "order": "desc",
-        "rows": MAX_RESULTS_PER_KEYWORD * 5, # 多取一些，因为白名单过滤可能很严
+        "rows": MAX_RESULTS_PER_KEYWORD * 5, 
         "mailto": EMAIL
     }
     
@@ -138,21 +138,19 @@ def fetch_crossref(keyword, from_date):
 
         data = response.json()
         items = data.get("message", {}).get("items", [])
-        total_results = data.get("message", {}).get("total-results", 0)
         
         if not items:
-            print(f"   ⚠️ 无结果 (总记录数: {total_results})")
+            print(f"   ⚠️ API 返回无结果")
             return []
 
         results = []
         skipped_non_target = 0
+        debug_journals = set() # 用来收集被跳过的期刊名
         
         for item in items:
-            # 1. 语言过滤
             if not is_english_item(item):
                 continue
             
-            # 2. 获取基本信息
             title_list = item.get("title", [])
             if not title_list:
                 continue
@@ -161,35 +159,37 @@ def fetch_crossref(keyword, from_date):
             journal_list = item.get("container-title", [])
             journal = journal_list[0] if journal_list else "Unknown Journal"
             
-            # 3. ✅ 白名单过滤 (最关键的步骤)
+            # ✅ 核心调试：先不管过不过滤，先打印出来看看
+            # 我们只打印前 10 个被跳过的，避免刷屏
             if not is_target_journal(journal):
+                if skipped_non_target < 10:
+                    debug_journals.add(journal)
+                    print(f"      ⏭️ [跳过] 期刊名原样: '{journal}' | 标题: {title[:50]}...")
+                elif skipped_non_target == 10:
+                    print(f"      ... (还有更多被跳过的期刊，未显示)")
+                
                 skipped_non_target += 1
-                # 只在调试时打印前几个被跳过的，避免刷屏
-                if skipped_non_target <= 3:
-                    print(f"      ⏭️ 跳过非目标期刊: {journal}")
-                elif skipped_non_target == 4:
-                    print(f"      ... 以及更多非目标期刊被跳过")
                 continue
             
-            # 4. 标题匹配度检查
+            # ... (后续的标题匹配、日期检查等逻辑保持不变) ...
+            # 为了节省篇幅，这里省略中间逻辑，直接保留原有的成功逻辑
+            # 请确保把原来的 title_matches_keyword, is_future_date 等检查逻辑放这里
+            
+            # --- 下面是原有逻辑的简化版，请把你原来的完整逻辑填回来 ---
             if not title_matches_keyword(title, keyword):
                 continue 
             
-            # 5. 日期有效性检查
             pub_date_parts = item.get("published", {}).get("date-parts", [[0,0,0]])[0]
             try:
                 y = pub_date_parts[0]
                 m = pub_date_parts[1] if len(pub_date_parts) > 1 else 1
                 d = pub_date_parts[2] if len(pub_date_parts) > 2 else 1
                 pub_date_str = f"{y}-{m:02d}-{d:02d}"
-                
                 if is_future_date(pub_date_str):
                     continue
-                    
             except:
                 continue
             
-            # 6. 提取其他信息
             abstract_raw = item.get("abstract", "")
             abstract = clean_abstract(abstract_raw)
             doi = item.get("DOI", "No DOI")
@@ -207,18 +207,25 @@ def fetch_crossref(keyword, from_date):
                     author_str += " et al."
             
             results.append({
-                "title": title,
-                "abstract": abstract,
-                "doi": doi,
-                "journal": journal,
-                "date": pub_date_str,
-                "authors": author_str
+                "title": title, "abstract": abstract, "doi": doi,
+                "journal": journal, "date": pub_date_str, "authors": author_str
             })
             
             if len(results) >= MAX_RESULTS_PER_KEYWORD:
                 break
         
-        print(f"   ✅ 最终保留 {len(results)} 篇 (跳过非目标期刊: {skipped_non_target})")
+        # 📢 调试总结报告
+        print(f"\n   📊 [调试报告] 关键词 '{keyword}':")
+        print(f"      - 总共检索到: {len(items)} 篇")
+        print(f"      - 因期刊不匹配跳过: {skipped_non_target} 篇")
+        print(f"      - 最终保留: {len(results)} 篇")
+        
+        if skipped_non_target > 0:
+            print(f"      💡 建议：请将以下期刊名添加到 TARGET_JOURNALS 列表中：")
+            for j in list(debug_journals)[:5]: # 只打印前5个不同的
+                print(f"         \"{j}\",")
+        print("-" * 30 + "\n")
+        
         return results
         
     except Exception as e:
