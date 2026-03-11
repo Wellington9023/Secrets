@@ -48,13 +48,12 @@ TARGET_JOURNALS = [
 
 # 关键词列表
 KEYWORDS = [
-    "mineral-associated organic carbon", 
-    "microbial necromass", 
-    "soil microbial community",
-    "soil aggregates",
-    "soil organic carbon stabilization",
+    "mineral-associated", 
+    "necromass", 
+    "microbial community",
+    "strategy",
+    "aggregates",
     "MAOC", # ✅ 新增：直接搜缩写，很多文章标题直接用 MAOC
-    "particulate organic carbon", # POC，常与 MAOC 对比
     "POC"
 ]
 
