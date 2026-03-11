@@ -42,6 +42,7 @@ TARGET_JOURNALS = [
     "Geophys. Res. Lett.",
     "Vadose Zone Journal",
     "Land Degradation & Development",
+    "Land Degradation",
     "Biology and Fertility of Soils",
     "Biol. Fertil. Soils"
 ]
@@ -50,11 +51,13 @@ TARGET_JOURNALS = [
 KEYWORDS = [
     "mineral-associated", 
     "necromass", 
-    "microbial community",
+    "microbial",
     "strategy",
     "aggregates",
     "MAOC", # ✅ 新增：直接搜缩写，很多文章标题直接用 MAOC
-    "POC"
+    "POC",
+    "CUE",
+    "molecular"
 ]
 
 EMAIL = "949238124@qq.com"
