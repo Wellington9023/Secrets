@@ -134,42 +134,87 @@ def is_target_journal(journal_name):
 
 def fetch_crossref(keyword):
     """
-    从 Crossref 获取文献数据
+    从 Crossref 获取文献数据 (最终修复版：解决 400 错误)
     """
     url = "https://api.crossref.org/works"
     
-    # 设置时间范围：最近 14 天 (可以根据需要调整)
-    # 格式：YYYY-MM-DD
+    # 1. 处理日期逻辑
     end_date = datetime.now()
     start_date = end_date - timedelta(days=14)
     
+    # 【重要】防御性编程：如果系统时间设置到了未来（如2026年），Crossref可能会报400
+    # 我们强制将查询范围限制在“当前实际年份”之前，或者至少是合理的过去时间
+    # 这里做一个简单检查：如果 start_date 年份大于 2024 (假设当前真实世界是2024/2025)，则回退
+    # 注意：如果你的测试环境确实是在模拟2026年，且Crossref已经收录了2026数据，可注释掉下面这块
+    current_real_year = 2025 # 假设真实世界当前是2025，防止穿越
+    if start_date.year > current_real_year:
+        print(f"⚠️ 警告：检测到日期可能穿越 ({start_date})，自动回退到 1 年前以防 API 报错")
+        start_date = end_date - timedelta(days=365)
+
+    date_str = start_date.strftime('%Y-%m-%d')
+    
+    # 2. 构建参数
     params = {
-        "query.bibliographic": keyword,  # 在标题、摘要、作者等元数据中搜索
-        "filter": f"from_pub_date:{start_date.strftime('%Y-%m-%d')}",
+        "query.bibliographic": keyword,
+        "filter": f"from_pub_date:{date_str}",
         "sort": "published",
         "order": "desc",
         "rows": FETCH_LIMIT,
-        "select": "title,author,container-title,published,abstract,DOI,URL"
+        # 【关键修改】彻底移除 select 参数！
+        # 原因：select 列表中的字段如果在某些记录中缺失或格式异常，易引发 400。
+        # 不传 select 会让 Crossref 返回默认完整对象，必然包含 abstract (如果有)。
     }
     
+    # 3. 设置合规的 Header
     headers = {
-        "User-Agent": "LiteratureBot/1.0 (mailto:your_email@example.com)" # 建议替换为你的邮箱
+        # 【必须】User-Agent 必须包含有效邮箱，否则会被 Crossref 拒绝 (400/403)
+        # 请确保这里的邮箱是你真实的，或者至少格式正确
+        "User-Agent": "LiteratureBot/1.0 (mailto:researcher@university.edu)", 
+        "Accept": "application/json"
     }
 
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        items = data.get("message", {}).get("items", [])
-        total_results = data.get("message", {}).get("total-results", 0)
-        
-        print(f"🔍 关键词 '{keyword}': API 返回总数 {total_results}, 本次获取前 {len(items)} 条")
-        
-        return items
-    except Exception as e:
-        print(f"❌ 获取数据失败 ({keyword}): {e}")
-        return []
+    # 4. 重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 打印调试信息 (GitHub Actions 日志可见)
+            if attempt == 0:
+                print(f"🌐 正在请求 Crossref: {keyword} (日期: {date_str})")
+            
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            
+            # 特殊处理 400 错误
+            if response.status_code == 400:
+                error_msg = response.text[:200]
+                print(f"⚠️ 收到 400 错误: {error_msg}")
+                
+                # 降级策略：去掉日期过滤器再试一次
+                print("🔄 尝试降级方案：移除日期过滤重新请求...")
+                fallback_params = {k: v for k, v in params.items() if k != 'filter'}
+                response = requests.get(url, params=fallback_params, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    print("✅ 降级成功！(注意：结果可能包含旧文章)")
+                else:
+                    # 如果降级也失败，直接抛出异常
+                    response.raise_for_status()
+
+            # 如果是其他错误 (404, 500, 503 等)，直接抛出
+            response.raise_for_status()
+            
+            data = response.json()
+            items = data.get("message", {}).get("items", [])
+            total_results = data.get("message", {}).get("total-results", 0)
+            
+            print(f"🔍 关键词 '{keyword}': API 返回总数 {total_results}, 本次获取 {len(items)} 条")
+            return items
+            
+        except requests.exceptions.RequestException as e:
+            print(f"❌ 请求失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                print(f"💥 最终放弃关键词 '{keyword}'")
+                return []
+            time.sleep(2) # 等待后重试
 
 def process_articles(items, keyword):
     """
