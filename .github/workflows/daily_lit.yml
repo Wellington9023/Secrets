@@ -2,25 +2,24 @@ name: Daily Literature Push
 
 on:
   schedule:
-    # 每天 UTC 时间 00:00 运行 (即北京时间早上 08:00)
-    # 如果你想改为其他时间，可以修改 cron 表达式
+    # 北京时间 08:05 (UTC 00:05)，避开整点高峰
     - cron: '5 0 * * *'
-  
-  # 允许手动触发测试
-  workflow_dispatch:
+  workflow_dispatch: # 允许手动触发
 
 jobs:
-  push-lit:
+  push-literature:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      # ✅ 升级点 1: checkout 从 v3 升级到 v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # ✅ 升级点 2: setup-python 从 v4 升级到 v5
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.9' # 也可以使用 '3.11' 以获得更好性能
 
       - name: Install dependencies
         run: |
