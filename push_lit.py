@@ -13,7 +13,7 @@ FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 # 如果你的服务器时间准确，这里填 None 即可自动获取。
 # 如果服务器时间穿越了（比如变成了2026年），请在这里填入真实的年份作为“校准基准”。
 # 程序会自动对比：如果系统年份 > 校准年份，则强制使用校准年份的当天。
-CALIBRATION_YEAR = 2026 # <--- 设置为当前的真实年份 (例如 2024 或 2025)
+CALIBRATION_YEAR = 2026  # <--- 设置为当前的真实年份 (例如 2024 或 2025)
 
 USER_AGENT_EMAIL = "kaikaimin@163.com" 
 
@@ -163,6 +163,169 @@ def fetch_crossref(keyword):
                 "query.bibliographic": keyword,
                 "rows": FETCH_LIMIT
             }
-            response = requests.get(url
+            response = requests.get(url, params=fallback_params, headers=headers, timeout=30)
+            
+        if response.status_code != 200:
+            print(f"   ❌ 请求失败: {response.status_code}")
+            return []
+            
+        data = response.json()
+        items = data.get("message", {}).get("items", [])
+        total_available = data.get("message", {}).get("total-results", 0)
+        
+        print(f"   🔍 数据库总数: {total_available}, 本次获取: {len(items)}")
+        return items
+        
+    except Exception as e:
+        print(f"   ❌ 网络异常: {e}")
+        return []
 
+def process_keyword_data(keyword, items, start_date_obj, end_date_obj):
+    valid_articles = []
+    seen_dois = set()
+    
+    for item in items:
+        title_list = item.get("title", [])
+        title = title_list[0] if title_list else "No Title"
+        journal_list = item.get("container-title", [])
+        journal = journal_list[0] if journal_list else "Unknown Journal"
+        doi = item.get("DOI", "")
+        
+        if doi in seen_dois: 
+            continue
+        seen_dois.add(doi)
+        
+        # --- 本地日期解析与过滤 ---
+        pub_date_raw = item.get("published", {}).get("date-parts", [[0,0,0]])
+        try:
+            p_year = pub_date_raw[0][0]
+            p_month = pub_date_raw[0][1] if len(pub_date_raw[0]) > 1 else 1
+            p_day = pub_date_raw[0][2] if len(pub_date_raw[0]) > 2 else 1
+            
+            article_date = datetime(p_year, p_month, p_day)
+            
+            if article_date < start_date_obj or article_date > end_date_obj:
+                continue
+                
+            pub_date_str = f"{p_year}-{p_month:02d}-{p_day:02d}"
+        except Exception:
+            # 无法解析日期，标记为未知，但保留（以防是 Online First）
+            pub_date_str = "Online First / Date Unknown"
 
+        link = item.get("URL", f"https://doi.org/{doi}")
+        abstract_text = clean_abstract(item.get("abstract", ""))
+        
+        if not is_target_journal(journal):
+            continue
+            
+        if not (matches_keyword(title, keyword) or matches_keyword(abstract_text, keyword)):
+            continue
+            
+        authors = item.get("author", [])
+        author_str = "et al."
+        if authors:
+            first = authors[0].get("given", "")
+            last = authors[0].get("family", "")
+            author_str = f"{first} {last}" + (" et al." if len(authors) > 1 else "")
+        
+        match_source = "摘要匹配" if (matches_keyword(abstract_text, keyword) and not matches_keyword(title, keyword)) else "标题匹配"
+        
+        valid_articles.append({
+            "title": title,
+            "journal": journal,
+            "authors": author_str,
+            "date": pub_date_str,
+            "link": link,
+            "doi": doi,
+            "match_source": match_source,
+            "abstract_snippet": abstract_text[:150] + "..." if len(abstract_text) > 150 else abstract_text
+        })
+        
+        if len(valid_articles) >= MAX_PER_KEYWORD:
+            break
+            
+    print(f"   ✅ 筛选后: {len(valid_articles)} 篇")
+    return valid_articles
+
+def send_combined_message(all_results, start_date, end_date):
+    if not FEISHU_WEBHOOK:
+        print("⚠️ 未配置 Webhook")
+        return
+
+    total_count = sum(len(arts) for kw, arts in all_results.items() if kw != '_meta')
+    
+    if total_count == 0:
+        print("💤 无新文献，不发送消息。")
+        return
+
+    content_lines = [
+        f"🔬 **土壤碳循环新文献日报**",
+        f"📅 检索窗口: {start_date} 至 {end_date}",
+        f"📊 共检索 {len(KEYWORDS)} 个关键词，发现 **{total_count}** 篇好文：\n"
+    ]
+
+    for kw, articles in all_results.items():
+        if kw == '_meta': continue
+        if not articles:
+            continue
+        
+        content_lines.append(f"▌ **关键词：{kw}** ({len(articles)}篇)")
+        
+        for i, art in enumerate(articles, 1):
+            icon = "🏷️" if art['match_source'] == "标题匹配" else "📝"
+            content_lines.append(
+                f"{i}. {icon} **{art['title']}**\n"
+                f"   👤 {art['authors']} | 📅 {art['date']}\n"
+                f"   📚 {art['journal']}\n"
+                f"   🔗 [DOI]({art['link']})\n"
+                f"   💡 _{art['abstract_snippet']}_\n"
+            )
+        content_lines.append("---\n")
+
+    full_text = "\n".join(content_lines)
+    
+    if len(full_text) > 4000:
+        full_text = full_text[:3900] + "\n\n... (内容过长，部分文献未显示)"
+
+    payload = {
+        "msg_type": "text",
+        "content": {"text": full_text}
+    }
+    
+    try:
+        resp = requests.post(FEISHU_WEBHOOK, json=payload)
+        if resp.status_code == 200:
+            print(f"🚀 成功发送合并消息 (共 {total_count} 篇)!")
+        else:
+            print(f"❌ 推送失败: {resp.text}")
+    except Exception as e:
+        print(f"❌ 发送异常: {e}")
+
+def main():
+    print(f"🚀 启动任务")
+    
+    # 1. 获取安全的“今天”
+    real_end = get_safe_today()
+    real_start = real_end - timedelta(days=14)
+    
+    start_str = real_start.strftime("%Y-%m-%d")
+    end_str = real_end.strftime("%Y-%m-%d")
+    
+    print(f"📅 设定检索范围: {start_str} 到 {end_str}")
+    
+    all_results = {'_meta': {'start': start_str, 'end': end_str}}
+    
+    for kw in KEYWORDS:
+        print(f"\n>>> 处理关键词: [{kw}]")
+        items = fetch_crossref(kw)
+        articles = process_keyword_data(kw, items, real_start, real_end)
+        all_results[kw] = articles
+        time.sleep(1)
+
+    print("\n" + "="*30)
+    print("📦 正在生成合并报告...")
+    send_combined_message(all_results, start_str, end_str)
+    print("🎉 任务结束")
+
+if __name__ == "__main__":
+    main()
