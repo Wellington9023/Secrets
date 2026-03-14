@@ -3,7 +3,7 @@ name: Daily Literature Push
 on:
   schedule:
     # 北京时间 08:05 (UTC 00:05)，避开整点高峰
-    - cron: '5 0 * * *'
+    - cron: '5 0 * * 2'
   workflow_dispatch: # 允许手动触发
 
 jobs:
